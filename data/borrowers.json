@@ -1,0 +1,10 @@
+[
+  {"id": "B001", "name": "Rahul Sharma", "dob": "1990-03-14", "last4": "4821", "loan_type": "personal loan", "emi_amount": 12500, "due_date": "2026-12-05", "days_overdue": 0, "language": "en"},
+  {"id": "B002", "name": "Priya Nair", "dob": "1988-11-02", "last4": "7733", "loan_type": "home loan", "emi_amount": 38400, "due_date": "2026-11-10", "days_overdue": 7, "language": "en"},
+  {"id": "B003", "name": "Amit Verma", "dob": "1985-07-21", "last4": "1096", "loan_type": "two-wheeler loan", "emi_amount": 3150, "due_date": "2026-11-12", "days_overdue": 5, "language": "hi"},
+  {"id": "B004", "name": "Sunita Reddy", "dob": "1993-01-30", "last4": "5502", "loan_type": "personal loan", "emi_amount": 8200, "due_date": "2026-11-25", "days_overdue": 0, "language": "en"},
+  {"id": "B005", "name": "Mohammed Iqbal", "dob": "1979-09-09", "last4": "2210", "loan_type": "business loan", "emi_amount": 54750, "due_date": "2026-10-28", "days_overdue": 20, "language": "en"},
+  {"id": "B006", "name": "Kavita Joshi", "dob": "1996-05-17", "last4": "9087", "loan_type": "consumer durable loan", "emi_amount": 2999, "due_date": "2026-11-20", "days_overdue": 0, "language": "hi"},
+  {"id": "B007", "name": "Arjun Menon", "dob": "1982-12-25", "last4": "3364", "loan_type": "car loan", "emi_amount": 21300, "due_date": "2026-11-08", "days_overdue": 9, "language": "en"},
+  {"id": "B008", "name": "Deepa Krishnan", "dob": "1991-08-04", "last4": "6648", "loan_type": "personal loan", "emi_amount": 6900, "due_date": "2026-11-30", "days_overdue": 0, "language": "en"}
+]

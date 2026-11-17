@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen Voice Agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --mute:#6b7280; --line:#e3e6ea; --acc:#0b6bcb; --ok:#127a3e; --bad:#b42318; }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#101216; --card:#181b21; --ink:#e8eaee; --mute:#98a1ad; --line:#2a2f37; --acc:#5aa2ff; --ok:#4cc38a; --bad:#ff7b72; } }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,Segoe UI,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr 320px}
+  @media(max-width:860px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+  h1{font-size:18px;margin:0 0 10px} h2{font-size:13px;color:var(--mute);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em}
+  select,button,input{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+  button.primary{background:var(--acc);color:#fff;border-color:transparent;cursor:pointer} button.stop{background:var(--bad);color:#fff;border-color:transparent}
+  button:disabled{opacity:.5}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  #log{height:420px;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:4px}
+  .m{max-width:82%;padding:8px 12px;border-radius:12px;border:1px solid var(--line)}
+  .agent{align-self:flex-start;background:color-mix(in srgb,var(--acc) 10%,var(--card))}
+  .user{align-self:flex-end}
+  .interim{opacity:.55;font-style:italic} .sys{align-self:center;color:var(--mute);font-size:12px}
+  .pill{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute)}
+  .state{font-weight:600} .state.listen{color:var(--ok)} .state.speak{color:var(--acc)}
+  pre{margin:0;white-space:pre-wrap;font-size:12px} table{width:100%;border-collapse:collapse;font-size:12px} td,th{padding:3px 4px;border-bottom:1px solid var(--line);text-align:left}
+  .hint{color:var(--mute);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Lumen Finance: EMI reminder call</h1>
+    <div class="row">
+      <select id="borrower"></select>
+      <button class="primary" id="start">Start call</button>
+      <button id="end" disabled>Hang up</button>
+      <span class="pill" id="mode">voice</span>
+      <span class="state" id="state">idle</span>
+    </div>
+    <div id="log"></div>
+    <div class="row" style="margin-top:10px">
+      <input id="typed" placeholder="Or type here if the mic is unavailable, then Enter" style="flex:1" disabled>
+      <button id="langbtn" title="Force the listening language">Listen: auto</button>
+    </div>
+    <div class="hint">Use Chrome or Edge. Just talk. You can interrupt the agent at any time.</div>
+  </div>
+  <div style="display:grid;gap:16px;align-content:start">
+    <div class="card"><h2>Latency (this call)</h2>
+      <div id="lat" class="hint">Speech end &rarr; first agent audio, per turn.</div>
+      <table id="lattable"></table></div>
+    <div class="card"><h2>Borrower cheat sheet (for the tester)</h2><div id="sheet" class="hint"></div></div>
+    <div class="card"><h2>Outcome record</h2><pre id="outcome">none yet</pre></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let ws, rec, listening = false, agentLang = 'en', forceLang = null;
+let queue = [], speaking = false, curUtt = null, spokenSoFar = '', turnSpoken = [], dropBefore = 0, curTurn = 0;
+let tUserEnd = 0, firstAudioLogged = true, silenceTimer = null, silences = 0, inCall = false, lastInterim = '';
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+fetch('/api/borrowers').then(r => r.json()).then(bs => {
+  $('borrower').innerHTML = bs.map(b => `<option value="${b.id}">${b.id} ${b.name} (${b.language})</option>`).join('');
+  $('sheet').innerHTML = bs.map(b => `<b>${b.name}</b>: DOB ${b.dob}, last4 ${b.last4}, ${b.loan_type}, ${b.emi_amount}, due ${b.due_date}${b.days_overdue ? ', ' + b.days_overdue + 'd overdue' : ''}`).join('<br>');
+});
+
+function add(cls, text) { const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text; $('log').appendChild(d); $('log').scrollTop = 1e9; return d; }
+function setState(t, c) { $('state').textContent = t; $('state').className = 'state ' + (c || ''); }
+
+function pickVoice(lang) {
+  const vs = speechSynthesis.getVoices();
+  const want = lang === 'hi' ? 'hi' : 'en-IN';
+  const m = vs.filter(v => v.lang.replace('_', '-').toLowerCase().startsWith(want.toLowerCase()));
+  return m.find(v => /neerja|swara|heera|female|google/i.test(v.name)) || m[0] || vs.find(v => v.lang.startsWith(lang === 'hi' ? 'hi' : 'en')) || null;
+}
+
+function pump() {
+  if (speaking || !queue.length) { if (!speaking && !queue.length && inCall) afterAgent(); return; }
+  const {text, lang} = queue.shift();
+  const u = new SpeechSynthesisUtterance(text);
+  const v = pickVoice(lang); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
+  u.rate = 1.05;
+  curUtt = {text, spoken: 0};
+  u.onstart = () => {
+    speaking = true; setState('agent speaking', 'speak');
+    if (!firstAudioLogged) { firstAudioLogged = true; const ms = Math.round(performance.now() - tUserEnd); addLat(ms); }
+  };
+  u.onboundary = e => { if (curUtt) curUtt.spoken = e.charIndex; };
+  u.onend = () => { turnSpoken.push(text); curUtt = null; speaking = false; pump(); };
+  u.onerror = () => { speaking = false; curUtt = null; pump(); };
+  speechSynthesis.speak(u);
+}
+
+function afterAgent() {
+  setState('listening', 'listen'); startRec(); armSilence();
+}
+function armSilence() {
+  clearTimeout(silenceTimer);
+  if (!inCall) return;
+  silenceTimer = setTimeout(() => {
+    if (speaking || queue.length || !inCall) return;
+    silences++; add('sys', '(caller silent)');
+    sendUser('[silence]', true);
+  }, 9000);
+}
+
+function bargeIn() {
+  // caller started talking over the agent: stop audio NOW, tell the server what was actually heard
+  if (!speaking && !queue.length) return;
+  const heard = (turnSpoken.join(' ') + ' ' + (curUtt ? curUtt.text.slice(0, curUtt.spoken) : '')).trim();
+  speechSynthesis.cancel(); queue = []; speaking = false; curUtt = null;
+  dropBefore = curTurn + 1;           // ignore any further sentences of the interrupted turn
+  ws.send(JSON.stringify({type: 'barge_in', spoken: heard}));
+  add('sys', '(interrupted: agent heard-out text: "' + heard.slice(-60) + '")');
+  turnSpoken = [];
+}
+
+function startRec() {
+  if (!SR || listening || !inCall) return;
+  rec = new SR(); rec.continuous = true; rec.interimResults = true;
+  rec.lang = forceLang || (agentLang === 'hi' ? 'hi-IN' : 'en-IN');
+  let interimEl = null;
+  rec.onstart = () => listening = true;
+  rec.onresult = e => {
+    clearTimeout(silenceTimer);
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i]; (r.isFinal ? (final += r[0].transcript) : (interim += r[0].transcript));
+    }
+    if ((interim || final) && (speaking || queue.length)) bargeIn();
+    if (interim && !final) { if (!interimEl) interimEl = add('user interim', ''); interimEl.textContent = interim; }
+    if (final.trim()) { if (interimEl) { interimEl.remove(); interimEl = null; } add('user', final.trim()); sendUser(final.trim(), false); }
+  };
+  rec.onend = () => { listening = false; if (inCall && !speaking) setTimeout(startRec, 150); };
+  rec.onerror = e => { listening = false; if (e.error === 'not-allowed') add('sys', 'Microphone blocked: allow it, or type below.'); };
+  try { rec.start(); } catch (e) {}
+}
+
+function sendUser(text, silent) {
+  tUserEnd = performance.now(); firstAudioLogged = false; turnSpoken = [];
+  setState('thinking', ''); try { rec && rec.stop(); } catch (e) {}
+  ws.send(JSON.stringify({type: 'user', text}));
+}
+
+let latRows = [];
+function addLat(ms) { latRows.push(ms); const s = [...latRows].sort((a, b) => a - b);
+  $('lattable').innerHTML = '<tr><th>turn</th><th>ms</th></tr>' + latRows.map((m, i) => `<tr><td>${i + 1}</td><td>${m}</td></tr>`).join('') +
+   `<tr><th>p50</th><th>${s[Math.floor((s.length - 1) * 0.5)]}</th></tr>`; }
+
+$('start').onclick = () => {
+  speechSynthesis.getVoices(); $('log').innerHTML = ''; latRows = []; $('lattable').innerHTML = ''; $('outcome').textContent = 'none yet';
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  inCall = true; silences = 0; dropBefore = 0; curTurn = 0;
+  ws.onopen = () => ws.send(JSON.stringify({type: 'start', borrower_id: $('borrower').value}));
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'agent') {
+      if (m.turn && m.turn < dropBefore) return;
+      curTurn = Math.max(curTurn, m.turn); agentLang = m.lang;
+      add('agent', m.text + (m.filler ? '  (filler)' : ''));
+      queue.push({text: m.text, lang: m.lang}); pump();
+    } else if (m.type === 'turn_done') {
+      const w = m.rate_limit_wait_ms ? ` 429wait ${Math.round(m.rate_limit_wait_ms)}ms` : '';
+      add('sys', `server: first sentence ${Math.round(m.first_sentence_ms || 0)} ms, tools [${m.tools.join(', ')}]${w}`);
+      if (m.violations.length) add('sys', 'guard caught: ' + m.violations.join(', '));
+    } else if (m.type === 'ended') {
+      $('outcome').textContent = JSON.stringify(m.outcome, null, 2); inCall = false; setState('call ended', '');
+      clearTimeout(silenceTimer); setTimeout(() => { try { rec && rec.stop(); } catch (e) {} }, 500); $('end').disabled = true; $('start').disabled = false;
+    } else if (m.type === 'error') add('sys', 'error: ' + m.detail);
+  };
+  $('start').disabled = true; $('end').disabled = false; $('typed').disabled = false;
+  if (!SR) add('sys', 'Speech recognition not supported in this browser: type below, or use Chrome/Edge.');
+};
+$('end').onclick = () => { inCall = false; speechSynthesis.cancel(); try { rec && rec.stop(); ws && ws.close(); } catch (e) {} setState('idle'); $('start').disabled = false; $('end').disabled = true; };
+$('typed').onkeydown = e => { if (e.key === 'Enter' && e.target.value.trim()) { const t = e.target.value.trim(); e.target.value = ''; if (speaking || queue.length) bargeIn(); add('user', t); sendUser(t, false); } };
+$('langbtn').onclick = () => { forceLang = forceLang === null ? 'en-IN' : forceLang === 'en-IN' ? 'hi-IN' : null; $('langbtn').textContent = 'Listen: ' + (forceLang || 'auto'); try { rec && rec.stop(); } catch (e) {} };
+</script>
+</body>
+</html>

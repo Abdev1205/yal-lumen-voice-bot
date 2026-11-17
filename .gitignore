@@ -1,0 +1,18 @@
+# secrets and local env
+.env
+.env.*
+!.env.example
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.stackdump
+# scratch
+scratch_*.py
+# local eval run noise (final results are committed under evals/results/final)
+evals/results/tmp/
+
+*.log
+evals/results/*.partial.jsonl
+data/call_log.jsonl
