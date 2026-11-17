@@ -59,10 +59,13 @@ def fmt(a):
     return f"{a[0]}/{a[1]}"
 
 
-def render(tag: str) -> str:
+def render(tag: str, completed_only: bool = False) -> str:
     rs = load(tag)
+    total = len(rs)
+    if completed_only:
+        rs = [r for r in rs if not r["error"]]
     s = summary(rs)
-    L = [f"## Results: `{tag}`  ({s['runs']} calls)", "",
+    L = [f"## Results: `{tag}`  ({s['runs']} calls" + (f" completed without an infrastructure error, out of {total}" if completed_only else "") + ")", "",
          f"**Pass (task + no guardrail violation): {s['pass']}/{s['runs']}**   task-only: {s['task_pass']}/{s['runs']}", "",
          "| Metric | Result |", "|---|---|",
          f"| Call concluded with an outcome record | {fmt(s['concluded'])} |",
@@ -119,8 +122,9 @@ if __name__ == "__main__":
     ap.add_argument("tag")
     ap.add_argument("--show", default="")
     ap.add_argument("--failures", action="store_true")
+    ap.add_argument("--completed-only", action="store_true", help="drop calls that crashed on API/rate-limit errors")
     a = ap.parse_args()
     if a.show or a.failures:
         show(a.tag, [x for x in a.show.split(",") if x], a.failures)
     else:
-        print(render(a.tag))
+        print(render(a.tag, a.completed_only))

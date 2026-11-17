@@ -77,6 +77,8 @@ class TurnMetrics:
     first_sentence_ms: float | None = None   # user turn received -> first sentence ready for TTS
     total_ms: float = 0.0
     rate_limit_wait_ms: float = 0.0          # time lost to provider 429s (free tier), reported separately
+    wait_before_first_ms: float = 0.0        # the part of that wait that happened before the first sentence
+    _w_start: float = 0.0
     tool_calls: list[str] = field(default_factory=list)
     models_used: list[str] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
@@ -111,6 +113,7 @@ class CallAgent:
     async def respond(self, user_text: str) -> AsyncIterator[dict]:
         t0 = time.perf_counter()
         tm = TurnMetrics()
+        tm._w_start = RateLimitClock.waited_s
         self.turns.append(tm)
         self._add_user(user_text)
         self.state.last_user_text = user_text
@@ -237,6 +240,7 @@ class CallAgent:
                 tm.violations.append(violation)
         if tm.first_sentence_ms is None:
             tm.first_sentence_ms = (time.perf_counter() - t0) * 1000
+            tm.wait_before_first_ms = (RateLimitClock.waited_s - tm._w_start) * 1000
         tm.agent_text += (" " if tm.agent_text else "") + sentence
         lang = lang_of(sentence)
         self.last_lang = lang

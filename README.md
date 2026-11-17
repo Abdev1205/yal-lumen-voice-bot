@@ -4,7 +4,7 @@ An outbound voice agent that calls a borrower about an upcoming or overdue EMI, 
 talking to, handles what the borrower says, offers a payment link, and records a structured outcome.
 Runs on a laptop in the browser. A narrow agent, built to sound good and to be measured honestly.
 
-- **Results and failures found:** [REPORT.md](REPORT.md)
+- **Results, failures found, and what is NOT verified:** [REPORT.md](REPORT.md) (read its first paragraph: free-tier API caps stopped a clean post-fix re-run)
 - **Design decisions:** below
 - **Eval scenarios:** [evals/scenarios.yaml](evals/scenarios.yaml)
 
@@ -20,8 +20,8 @@ cp .env.example .env                                # then paste LLM_API_KEY and
 python server.py                                    # voice demo -> http://localhost:8000 (Chrome or Edge)
 python chat.py B001                                 # or: text chat in the terminal
 python -m pytest -q tests                           # unit tests (no keys needed)
-python -m evals.runner --runs 3 --tag mytest        # full eval suite (19 scenarios x 3 runs)
-python -m evals.report mytest                       # metrics table
+python -m evals.runner --runs 2 --tag mytest        # full eval suite (19 scenarios x 2 runs; needs ~400k tokens, see REPORT.md)
+python -m evals.report mytest --completed-only      # metrics table (drops calls that crashed on API errors)
 python -m evals.report mytest --failures            # transcripts of failing calls
 ```
 
@@ -90,6 +90,6 @@ tests/        unit tests: verification gate, grounding, spoken numbers and dates
 
 - Evals are text-level: the simulated borrower types, it does not speak. Barge-in is simulated by truncating the agent's turn,
   not with real overlapping audio. Latency in the evals is LLM time to first sentence, not full speech-to-speech.
-- Eval runs happened on free-tier models and rate limits. Raw latency is reported both with and without 429 waits.
+- Eval runs happened on free-tier models. 21 of the 38 baseline calls crashed on rate limits or a provider error and are reported separately; no clean post-fix re-run was possible. See REPORT.md.
 - The judge is an LLM. It was spot-checked by hand on a sample (see REPORT.md), not calibrated against a panel of human raters.
 - No real telephony, voicemail detection or human hand-off beyond the `escalate_to_human` flag.

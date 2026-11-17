@@ -115,7 +115,7 @@ async def run_one(sc: dict, borrowers: dict, run_idx: int) -> dict:
             guard[v] = guard.get(v, 0) + 1
 
     lat = [tm.first_sentence_ms for tm in turn_metrics if tm.first_sentence_ms is not None]
-    lat_net = [max(0.0, tm.first_sentence_ms - tm.rate_limit_wait_ms) for tm in turn_metrics
+    lat_net = [max(0.0, tm.first_sentence_ms - tm.wait_before_first_ms) for tm in turn_metrics
                if tm.first_sentence_ms is not None]
     jd = await judge([t for t in transcript if t["who"] in ("agent", "borrower")])
 
