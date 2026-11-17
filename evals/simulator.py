@@ -49,10 +49,10 @@ def _clients():
     return _gem, _groq
 
 
-# (client_kind, model). The borrower runs on Groq/Qwen (a different family from the agent's gpt-oss).
-# The judge prefers Gemini (a third family) and falls back to Groq when Gemini's free tier is exhausted.
-BORROWER_CHAIN = [("groq", "qwen/qwen3.8-27b"), ("groq", "openai/gpt-oss-120b")]
-JUDGE_CHAIN = [("gemini", SIM_MODEL), ("groq", "openai/gpt-oss-120b"), ("groq", "qwen/qwen3.8-27b")]
+# (client_kind, model). Both the borrower and the judge prefer Gemini (a different family from the agent's gpt-oss)
+# and fall back to Groq/Qwen when Gemini's free tier is rate limited.
+BORROWER_CHAIN = [("gemini", SIM_MODEL), ("groq", "qwen/qwen3.8-27b"), ("groq", "openai/gpt-oss-120b")]
+JUDGE_CHAIN = [("gemini", SIM_MODEL), ("groq", "qwen/qwen3.8-27b"), ("groq", "openai/gpt-oss-120b")]
 
 
 async def _chat(messages, temperature, chain, max_tokens=200, json_mode=False):
@@ -63,6 +63,8 @@ async def _chat(messages, temperature, chain, max_tokens=200, json_mode=False):
             kw = dict(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
             if "gemini-2.5" in model:
                 kw["extra_body"] = {"reasoning_effort": "none"}
+            elif "gemini-3" in model:
+                kw["extra_body"] = {"reasoning_effort": "low"}
             elif "gpt-oss" in model:
                 kw["extra_body"] = {"reasoning_effort": "low"}
             if json_mode and kind == "gemini":

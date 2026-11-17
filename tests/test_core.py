@@ -84,3 +84,39 @@ def test_name_or_yes_is_not_an_attempt():
         r = run(run_tool(s, "verify_identity", {"answer": guess}))
         assert r.get("not_provided"), guess
     assert s.verify_attempts == 0
+
+
+def test_last_four_inside_a_sentence():
+    # found in evals: the word "four" in "the last four" must not be read as a digit
+    s = st("B007")
+    r = _v(s, "What the hell do you want with my DOB? If you just need the last four, it's 3364.")
+    assert r["verified"] is True
+
+
+def test_relative_date_checked_against_callers_words():
+    s = st()
+    s.verified = True
+    s.user_texts = ["I'll pay this coming Friday"]
+    bad = run(run_tool(s, "record_outcome", {"outcome": "promise_to_pay", "promise_to_pay_date": "2026-11-24", "escalate_to_human": False, "notes": "x"}))
+    assert "2026-11-20" in bad["error"]
+    ok = run(run_tool(s, "record_outcome", {"outcome": "promise_to_pay", "promise_to_pay_date": "2026-11-20", "escalate_to_human": False, "notes": "x"}))
+    assert ok["promise_date_spoken"] == "Friday, the twentieth of November"
+
+
+def test_tomorrow_and_day_of_month():
+    s = st()
+    s.user_texts = ["kal tak pay kar dunga, I mean tomorrow"]
+    assert "2026-11-18" in run(run_tool(s, "record_outcome", {"outcome": "will_pay", "promise_to_pay_date": "2026-11-30", "escalate_to_human": False, "notes": "x"}))["error"]
+    s2 = st()
+    s2.user_texts = ["I will pay on the 28th of November"]
+    assert "error" in run(run_tool(s2, "record_outcome", {"outcome": "will_pay", "promise_to_pay_date": "2026-11-27", "escalate_to_human": False, "notes": "x"}))
+    assert "recorded" in run(run_tool(s2, "record_outcome", {"outcome": "will_pay", "promise_to_pay_date": "2026-11-28", "escalate_to_human": False, "notes": "x"}))
+
+
+def test_text_tool_calls_are_extracted():
+    from lumen.agent import extract_text_calls
+    t, calls = extract_text_calls('Thank you. [Calling record_outcome]{"outcome": "will_pay", "notes": "a {b}"} Goodbye.')
+    assert calls[0][0] == "record_outcome" and '"will_pay"' in calls[0][1]
+    assert "record_outcome" not in t and "will_pay" not in t and "Goodbye" in t
+    t2, c2 = extract_text_calls('Sure. record_outcome({"outcome": "dispute"}) Bye.')
+    assert c2 and "record_outcome" not in t2

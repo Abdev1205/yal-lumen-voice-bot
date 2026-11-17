@@ -16,8 +16,8 @@ from openai import AsyncOpenAI, RateLimitError
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-20b")
 # On a 429 we fail over to the next model immediately (each model has its own free-tier limit).
-AGENT_FALLBACKS = [m for m in os.getenv("AGENT_FALLBACKS", "openai/gpt-oss-120b,qwen/qwen3.8-27b").split(",") if m]
-SIM_MODEL = os.getenv("SIM_MODEL", "gemini-2.5-flash")
+AGENT_FALLBACKS = [m for m in os.getenv("AGENT_FALLBACKS", "qwen/qwen3.8-27b,openai/gpt-oss-120b").split(",") if m]
+SIM_MODEL = os.getenv("SIM_MODEL", "gemini-3-flash-preview")
 SIM_BASE_URL = os.getenv("SIM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
 
 
@@ -56,11 +56,13 @@ def to_openai_tools(schemas: list[dict]) -> list[dict]:
                                               "parameters": s["input_schema"]}} for s in schemas]
 
 
-async def chat_with_failover(client, *, messages, tools, clock: type[RateLimitClock] = RateLimitClock, **kw):
+async def chat_with_failover(client, *, messages, tools, exclude=frozenset(),
+                             clock: type[RateLimitClock] = RateLimitClock, **kw):
     """Stream a chat completion. On 429, try the next model at once; only sleep if all are limited.
+    `exclude` skips models that already returned a malformed tool call this turn.
     Returns (stream, model_used)."""
-    models = [AGENT_MODEL, *AGENT_FALLBACKS]
-    for rnd in range(4):
+    models = [m for m in [AGENT_MODEL, *AGENT_FALLBACKS] if m not in exclude] or [AGENT_MODEL, *AGENT_FALLBACKS]
+    for rnd in range(14):
         for model in models:
             extra = {"reasoning_effort": "low"} if "gpt-oss" in model else {}
             try:

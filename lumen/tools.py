@@ -10,7 +10,7 @@ import json
 import random
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ class CallState:
     tool_log: list[dict] = field(default_factory=list)
     # eval knobs: simulate a slow or failing tool
     last_user_text: str = ""   # what the caller actually said this turn (grounding check)
+    user_texts: list[str] = field(default_factory=list)   # everything the caller said, for date checks
     tool_delay: float = 0.0
     fail_payment_link: bool = False
 
@@ -60,10 +61,15 @@ def _norm(text: str) -> str:
     return re.sub(r"\b(" + "|".join(_DIGIT_WORDS) + r")\b", lambda m: _DIGIT_WORDS[m.group(1)], text.lower())
 
 
+def _runs(norm_text: str) -> list[str]:
+    """Groups of consecutive digits: 'last 4, it is 33 64' -> ['4', '3364']; '14/03/1990' -> ['14031990']."""
+    return [_digits(r) for r in re.findall(r"\d+(?:[\s/.\-]\d+)*", norm_text)]
+
+
 def _plausible(answer: str) -> bool:
     """Looks like a DOB or last-4 answer at all (a name or 'yes' is not an attempt)."""
     a = _norm(answer)
-    return len(_digits(a)) >= 4 or any(m in a for m in _MONTHS)
+    return any(len(r) >= 4 for r in _runs(a)) or any(m in a for m in _MONTHS)
 
 
 def _grounded(answer: str, user_text: str) -> bool:
@@ -96,16 +102,13 @@ def verify_identity(state: CallState, answer: str = "") -> dict:
     b = state.borrower
     a = heard
     ok = False
-    if _digits(a) == b["last4"]:
+    y, m, d = b["dob"].split("-")
+    month_name = date(int(y), int(m), 1).strftime("%B").lower()
+    runs = _runs(a)
+    if b["last4"] in runs or any(r in (f"{d}{m}{y}", f"{y}{m}{d}") for r in runs):
         ok = True
-    else:
-        y, m, d = b["dob"].split("-")
-        month_name = date(int(y), int(m), 1).strftime("%B").lower()
-        digits = _digits(a)
-        if digits in (f"{d}{m}{y}", f"{y}{m}{d}"):
-            ok = True
-        elif month_name in a and y in a and re.search(rf"\b0?{int(d)}(st|nd|rd|th)?\b", a):
-            ok = True
+    elif month_name in a and y in a and re.search(rf"\b0?{int(d)}(st|nd|rd|th)?\b", a):
+        ok = True
     state.verified = ok
     if ok:
         return {"verified": True}
@@ -142,11 +145,44 @@ async def send_payment_link(state: CallState) -> dict:
             "link": f"https://pay.lumenfinance.example/{state.borrower['id']}"}
 
 
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def _next_weekday(today: date, wd: int) -> date:
+    delta = (wd - today.weekday()) % 7
+    return today + timedelta(days=delta or 7)
+
+
+def check_promise_date(state: CallState, pd: date) -> str | None:
+    """Cross-check the model's date against the caller's own words. LLMs are bad at date arithmetic
+    (found in evals: 'this Friday' recorded as the 24th, 'tomorrow' as 'Monday 30th')."""
+    said = " ".join(state.user_texts[-3:]).lower()
+    weekdays = [i for i, n in enumerate(_WEEKDAYS) if n in said]
+    if weekdays:
+        if pd.weekday() not in weekdays:
+            n = weekdays[0]
+            return (f"{pd.isoformat()} is a {pd.strftime('%A')}, but the caller said {_WEEKDAYS[n].title()}. "
+                    f"The next {_WEEKDAYS[n].title()} is {_next_weekday(state.today, n).isoformat()}. Use that date.")
+        return None
+    if "tomorrow" in said and pd != state.today + timedelta(days=1):
+        return f"The caller said tomorrow, which is {(state.today + timedelta(days=1)).isoformat()}. Use that date."
+    if re.search(r"\btoday\b", said) and pd != state.today and "tomorrow" not in said:
+        return f"The caller said today, which is {state.today.isoformat()}. Use that date."
+    mon = "|".join(_MONTHS)
+    m = (re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{mon})\b", said)
+         or re.search(rf"(?:{mon})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b", said)
+         or re.search(r"\b(\d{1,2})(?:st|nd|rd|th)\b", said))
+    if m and 1 <= int(m.group(1)) <= 31 and pd.day != int(m.group(1)):
+        return f"The caller said the {m.group(1)}th, but {pd.isoformat()} is day {pd.day}. Use the day the caller said."
+    return None
+
+
 def record_outcome(state: CallState, outcome: str, notes: str = "",
                    promise_to_pay_date: str | None = None,
                    escalate_to_human: bool = False) -> dict:
     if outcome not in OUTCOMES:
         return {"error": f"outcome must be one of {OUTCOMES}"}
+    spoken = None
     if promise_to_pay_date:
         try:
             pd = date.fromisoformat(promise_to_pay_date)
@@ -154,6 +190,11 @@ def record_outcome(state: CallState, outcome: str, notes: str = "",
             return {"error": "promise_to_pay_date must be YYYY-MM-DD"}
         if pd < state.today:
             return {"error": f"promise_to_pay_date is in the past (today is {state.today})"}
+        if state.outcome is None:
+            problem = check_promise_date(state, pd)
+            if problem:
+                return {"error": problem}
+        spoken = f"{pd.strftime('%A')}, {date_spoken(pd, state.today)}"
     # idempotent: first record wins; a retry returns the same result
     if state.outcome is None:
         state.outcome = {
@@ -165,7 +206,10 @@ def record_outcome(state: CallState, outcome: str, notes: str = "",
             "escalate_to_human": escalate_to_human,
             "notes": notes,
         }
-    return {"recorded": True}
+    res = {"recorded": True}
+    if spoken:
+        res["promise_date_spoken"] = spoken   # say this, exactly, when confirming the date to the caller
+    return res
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
