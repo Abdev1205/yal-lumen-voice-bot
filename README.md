@@ -53,7 +53,7 @@ Outcome record: `{borrower_id, verified, outcome, promise_to_pay_date, payment_l
 | Decision | Why |
 |---|---|
 | **The verification gate is enforced in code, not in the prompt.** The model's system prompt contains no loan data. `get_loan_details` and `send_payment_link` refuse until `verify_identity` passes. | A prompt rule is a request; a missing capability is a guarantee. A family member cannot talk the model into revealing what it does not have. |
-| **`verify_identity` must be grounded in the caller's own words.** The tool rejects any answer that does not appear in what the caller just said, and does not count it as an attempt. | Found in testing: the model invented a date of birth and locked the call out. See REPORT.md. |
+| **`verify_identity` takes no arguments: it reads the caller's own last utterance.** The model never supplies the answer, and an utterance with no date or digits is not counted as an attempt. | Found in testing: the model invented a date of birth and locked the call out. See REPORT.md. |
 | **Numbers and dates are spoken-form from the tools** ("twelve thousand five hundred rupees", "the fifth of December", Indian numbering). | The LLM never has digits to read out like a form. |
 | **Calendar in the prompt for relative dates** ("Friday", "tomorrow"). | LLMs are unreliable at date arithmetic; the model looks the date up. The tool also rejects past dates. |
 | **Streaming, sentence by sentence.** TTS starts on the first sentence while the model is still generating. | Latency is measured to the first spoken sentence, which is what the caller waits for. |
